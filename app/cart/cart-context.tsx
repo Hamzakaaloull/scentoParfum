@@ -1,176 +1,228 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { createContext, useCallback, useContext, useMemo, useOptimistic, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { clearCart } from "@/app/cart/actions";
 
 export type CartLineItem = {
-	quantity: number;
-	productVariant: {
-		id: string;
-		price: string;
-		images: string[];
-		product: {
-			id: string;
-			name: string;
-			slug: string;
-			images: string[];
-		};
-	};
+  quantity: number;
+  productVariant: {
+    id: string;
+    price: number;  // تغيير من string إلى number مباشرة
+    images: string[];
+    product: {
+      id: string;
+      name: string;
+      slug: string;
+      images: string[];
+    };
+  };
 };
 
 export type Cart = {
-	id: string;
-	lineItems: CartLineItem[];
+  id: string;
+  lineItems: CartLineItem[];
 };
 
-type CartAction =
-	| { type: "INCREASE"; variantId: string }
-	| { type: "DECREASE"; variantId: string }
-	| { type: "REMOVE"; variantId: string }
-	| { type: "ADD_ITEM"; item: CartLineItem };
-
 type CartContextValue = {
-	cart: Cart | null;
-	items: CartLineItem[];
-	itemCount: number;
-	subtotal: bigint;
-	isOpen: boolean;
-	cartId: string | null;
-	openCart: () => void;
-	closeCart: () => void;
-	dispatch: (action: CartAction) => void;
+  cart: Cart | null;
+  items: CartLineItem[];
+  itemCount: number;
+  subtotal: number;
+  isOpen: boolean;
+  cartId: string | null;
+  openCart: () => void;
+  closeCart: () => void;
+  addItem: (item: CartLineItem) => void;
+  removeItem: (variantId: string) => void;
+  increaseQuantity: (variantId: string) => void;
+  decreaseQuantity: (variantId: string) => void;
+  setCart: (cart: Cart | null) => void;
+  emptyCart: () => Promise<void>;
 };
 
 const CartContext = createContext<CartContextValue | null>(null);
 
 type CartProviderProps = {
-	children: ReactNode;
-	initialCart: Cart | null;
-	initialCartId: string | null;
+  children: ReactNode;
+  initialCart: Cart | null;
+  initialCartId: string | null;
 };
 
 export function CartProvider({ children, initialCart, initialCartId }: CartProviderProps) {
-	const [isOpen, setIsOpen] = useState(false);
+  const router = useRouter();
+  const [isOpen, setIsOpen] = useState(false);
+  const [cart, setCartState] = useState<Cart | null>(initialCart);
+  const [cartId, setCartId] = useState<string | null>(initialCartId);
 
-	const [optimisticCart, dispatchCartAction] = useOptimistic(initialCart, (state, action: CartAction) => {
-		if (!state) {
-			// Handle ADD_ITEM when cart is null
-			if (action.type === "ADD_ITEM") {
-				return {
-					id: "optimistic",
-					lineItems: [action.item],
-				};
-			}
-			return state;
-		}
+  useEffect(() => {
+    setCartState(initialCart);
+    setCartId(initialCartId);
+  }, [initialCart, initialCartId]);
 
-		switch (action.type) {
-			case "INCREASE":
-				return {
-					...state,
-					lineItems: state.lineItems.map((item) =>
-						item.productVariant.id === action.variantId ? { ...item, quantity: item.quantity + 1 } : item,
-					),
-				};
+  const items = useMemo(() => cart?.lineItems ?? [], [cart]);
+  const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
+  
+  // حساب الإجمالي الفرعي مباشرة بدون تقسيم
+  const subtotal = useMemo(() => {
+    return items.reduce((sum, item) => {
+      const price = item.productVariant.price || 0;
+      return sum + (price * item.quantity);
+    }, 0);
+  }, [items]);
 
-			case "DECREASE":
-				return {
-					...state,
-					lineItems: state.lineItems
-						.map((item) => {
-							if (item.productVariant.id === action.variantId) {
-								if (item.quantity - 1 <= 0) {
-									return null;
-								}
-								return { ...item, quantity: item.quantity - 1 };
-							}
-							return item;
-						})
-						.filter((item): item is CartLineItem => item !== null),
-				};
+  const openCart = useCallback(() => setIsOpen(true), []);
+  const closeCart = useCallback(() => setIsOpen(false), []);
 
-			case "REMOVE":
-				return {
-					...state,
-					lineItems: state.lineItems.filter((item) => item.productVariant.id !== action.variantId),
-				};
+  const addItem = useCallback((item: CartLineItem) => {
+    console.log("Adding item to cart:", item);
+    
+    setCartState((prevCart) => {
+      if (!prevCart) {
+        return {
+          id: "optimistic",
+          lineItems: [item],
+        };
+      }
 
-			case "ADD_ITEM": {
-				const existingItem = state.lineItems.find(
-					(item) => item.productVariant.id === action.item.productVariant.id,
-				);
+      const existingItem = prevCart.lineItems.find(
+        (i) => i.productVariant.id === item.productVariant.id
+      );
 
-				if (existingItem) {
-					return {
-						...state,
-						lineItems: state.lineItems.map((item) =>
-							item.productVariant.id === action.item.productVariant.id
-								? { ...item, quantity: item.quantity + action.item.quantity }
-								: item,
-						),
-					};
-				}
+      if (existingItem) {
+        return {
+          ...prevCart,
+          lineItems: prevCart.lineItems.map((i) =>
+            i.productVariant.id === item.productVariant.id
+              ? { ...i, quantity: i.quantity + item.quantity }
+              : i
+          ),
+        };
+      }
 
-				return {
-					...state,
-					lineItems: [...state.lineItems, action.item],
-				};
-			}
+      return {
+        ...prevCart,
+        lineItems: [...prevCart.lineItems, item],
+      };
+    });
+  }, []);
 
-			default:
-				return state;
-		}
-	});
+  const removeItem = useCallback((variantId: string) => {
+    setCartState((prevCart) => {
+      if (!prevCart) return prevCart;
+      return {
+        ...prevCart,
+        lineItems: prevCart.lineItems.filter((item) => item.productVariant.id !== variantId),
+      };
+    });
+  }, []);
 
-	const items = useMemo(() => optimisticCart?.lineItems ?? [], [optimisticCart]);
+  const increaseQuantity = useCallback((variantId: string) => {
+    setCartState((prevCart) => {
+      if (!prevCart) return prevCart;
+      return {
+        ...prevCart,
+        lineItems: prevCart.lineItems.map((item) =>
+          item.productVariant.id === variantId
+            ? { ...item, quantity: item.quantity + 1 }
+            : item
+        ),
+      };
+    });
+  }, []);
 
-	const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
+  const decreaseQuantity = useCallback((variantId: string) => {
+    setCartState((prevCart) => {
+      if (!prevCart) return prevCart;
+      return {
+        ...prevCart,
+        lineItems: prevCart.lineItems
+          .map((item) => {
+            if (item.productVariant.id === variantId) {
+              if (item.quantity - 1 <= 0) {
+                return null;
+              }
+              return { ...item, quantity: item.quantity - 1 };
+            }
+            return item;
+          })
+          .filter((item): item is CartLineItem => item !== null),
+      };
+    });
+  }, []);
 
-	const subtotal = useMemo(
-		() =>
-			items.reduce((sum, item) => sum + BigInt(item.productVariant.price) * BigInt(item.quantity), BigInt(0)),
-		[items],
-	);
+  const setCart = useCallback((newCart: Cart | null) => {
+    setCartState(newCart);
+    if (newCart?.id && newCart.id !== "optimistic") {
+      setCartId(newCart.id);
+    } else if (!newCart) {
+      setCartId(null);
+    }
+  }, []);
 
-	const openCart = useCallback(() => setIsOpen(true), []);
-	const closeCart = useCallback(() => setIsOpen(false), []);
+// Update the emptyCart function to ensure proper refresh
+const emptyCart = useCallback(async () => {
+  console.log("🛒 [Cart Context] Emptying cart...");
+  
+  const result = await clearCart();
+  console.log("🛒 [Cart Context] Clear cart result:", result);
+  
+  if (result.success) {
+    setCartState(null);
+    setCartId(null);
+    // Force a complete refresh
+    router.refresh();
+    // Also refresh cart context
+    setTimeout(() => {
+      router.refresh();
+    }, 100);
+    console.log("🛒 [Cart Context] Cart emptied successfully");
+  }
+}, [router]);
 
-	// Derive cartId from optimistic cart or initial
-	const currentCartId =
-		optimisticCart?.id && optimisticCart.id !== "optimistic" ? optimisticCart.id : initialCartId;
+  const value = useMemo(
+    () => ({
+      cart,
+      items,
+      itemCount,
+      subtotal,
+      isOpen,
+      cartId,
+      openCart,
+      closeCart,
+      addItem,
+      removeItem,
+      increaseQuantity,
+      decreaseQuantity,
+      setCart,
+      emptyCart,
+    }),
+    [
+      cart,
+      items,
+      itemCount,
+      subtotal,
+      isOpen,
+      cartId,
+      openCart,
+      closeCart,
+      addItem,
+      removeItem,
+      increaseQuantity,
+      decreaseQuantity,
+      setCart,
+      emptyCart,
+    ]
+  );
 
-	const value = useMemo(
-		() => ({
-			cart: optimisticCart,
-			items,
-			itemCount,
-			subtotal,
-			isOpen,
-			cartId: currentCartId,
-			openCart,
-			closeCart,
-			dispatch: dispatchCartAction,
-		}),
-		[
-			optimisticCart,
-			items,
-			itemCount,
-			subtotal,
-			isOpen,
-			currentCartId,
-			openCart,
-			closeCart,
-			dispatchCartAction,
-		],
-	);
-
-	return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
+  return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
 
 export function useCart() {
-	const context = useContext(CartContext);
-	if (!context) {
-		throw new Error("useCart must be used within a CartProvider");
-	}
-	return context;
+  const context = useContext(CartContext);
+  if (!context) {
+    throw new Error("useCart must be used within a CartProvider");
+  }
+  return context;
 }

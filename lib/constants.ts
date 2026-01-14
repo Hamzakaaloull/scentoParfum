@@ -1,2 +1,3 @@
-export const CURRENCY = "USD" as const;
-export const LOCALE = "en-US" as const;
+// lib/constants.ts
+export const CURRENCY = "MAD";
+export const LOCALE = "en-US"; // أو "ar-MA" إذا كنت تريد العربية

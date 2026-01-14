@@ -1,129 +1,78 @@
 "use client";
 
-import { useSearchParams } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { addToCart } from "@/app/cart/actions";
 import { useCart } from "@/app/cart/cart-context";
-import { QuantitySelector } from "@/app/product/[slug]/quantity-selector";
-import { TrustBadges } from "@/app/product/[slug]/trust-badges";
-import { VariantSelector } from "@/app/product/[slug]/variant-selector";
-import { CURRENCY, LOCALE } from "@/lib/constants";
-import { formatMoney } from "@/lib/money";
+import { ShoppingCart } from "lucide-react";
 
 type Variant = {
-	id: string;
-	price: string;
-	images: string[];
-	combinations: {
-		variantValue: {
-			id: string;
-			value: string;
-			colorValue: string | null;
-			variantType: {
-				id: string;
-				type: "string" | "color";
-				label: string;
-			};
-		};
-	}[];
+  id: string;
+  price: number;
+  images: string[];
 };
 
 type AddToCartButtonProps = {
-	variants: Variant[];
-	product: {
-		id: string;
-		name: string;
-		slug: string;
-		images: string[];
-	};
+  variants: Variant[];
+  product: {
+    id: string;
+    name: string;
+    slug: string;
+    images: string[];
+    price?: number;
+    promoPrice?: number;
+  };
 };
 
 export function AddToCartButton({ variants, product }: AddToCartButtonProps) {
-	const searchParams = useSearchParams();
-	const [quantity, setQuantity] = useState(1);
-	const [isPending, startTransition] = useTransition();
-	const { openCart, dispatch } = useCart();
+  const [isPending, startTransition] = useTransition();
+  const { openCart, addItem } = useCart();
 
-	const selectedVariant = useMemo(() => {
-		if (variants.length === 1) {
-			return variants[0];
-		}
+  // Always use the first variant for simple products
+  const selectedVariant = variants[0];
 
-		if (searchParams.size === 0) {
-			return undefined;
-		}
+  const handleAddToCart = () => {
+    if (!selectedVariant) return;
 
-		const paramsOptions: Record<string, string> = {};
-		searchParams.forEach((valueName, key) => {
-			paramsOptions[key] = valueName;
-		});
+    startTransition(async () => {
+      // Add item to cart state with complete product info
+      addItem({
+        quantity: 1,
+        productVariant: {
+          id: selectedVariant.id,
+          price: product.price || selectedVariant.price || 0,
+          images: selectedVariant.images || product.images || [],
+          product: {
+            id: product.id,
+            name: product.name,
+            slug: product.slug,
+            images: product.images,
+          },
+        },
+      });
 
-		return variants.find((variant) =>
-			variant.combinations.every(
-				(combination) =>
-					paramsOptions[combination.variantValue.variantType.label] === combination.variantValue.value,
-			),
-		);
-	}, [variants, searchParams]);
+      // Open cart sidebar
+      openCart();
 
-	const totalPrice = selectedVariant ? BigInt(selectedVariant.price) * BigInt(quantity) : null;
+      // Execute server action
+      const result = await addToCart(selectedVariant.id, 1);
+      
+      if (!result.success) {
+        console.error("Failed to add to cart:", result.error);
+        // You might want to show an error message to the user here
+      }
+    });
+  };
 
-	const buttonText = useMemo(() => {
-		if (isPending) return "Adding...";
-		if (!selectedVariant) return "Select options";
-		if (totalPrice) {
-			return `Add to Cart — ${formatMoney({ amount: totalPrice, currency: CURRENCY, locale: LOCALE })}`;
-		}
-		return "Add to Cart";
-	}, [isPending, selectedVariant, totalPrice]);
+  const buttonText = isPending ? "Adding..." : "Add to Cart";
 
-	const handleSubmit = (e: React.FormEvent) => {
-		e.preventDefault();
-
-		if (!selectedVariant) return;
-
-		// Open cart sidebar
-		openCart();
-
-		// Execute server action with optimistic update
-		startTransition(async () => {
-			// Dispatch inside transition for optimistic update
-			dispatch({
-				type: "ADD_ITEM",
-				item: {
-					quantity,
-					productVariant: {
-						id: selectedVariant.id,
-						price: selectedVariant.price,
-						images: selectedVariant.images,
-						product,
-					},
-				},
-			});
-
-			await addToCart(selectedVariant.id, quantity);
-			// Reset quantity after add
-			setQuantity(1);
-		});
-	};
-
-	return (
-		<div className="space-y-8">
-			{variants.length > 1 && <VariantSelector variants={variants} selectedVariantId={selectedVariant?.id} />}
-
-			<QuantitySelector quantity={quantity} onQuantityChange={setQuantity} disabled={isPending} />
-
-			<form onSubmit={handleSubmit}>
-				<button
-					type="submit"
-					disabled={isPending || !selectedVariant}
-					className="w-full h-14 bg-foreground text-primary-foreground py-4 px-8 rounded-full text-base font-medium tracking-wide hover:bg-foreground/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					{buttonText}
-				</button>
-			</form>
-
-			<TrustBadges />
-		</div>
-	);
+  return (
+    <button
+      onClick={handleAddToCart}
+      disabled={isPending || !selectedVariant}
+      className="w-full h-10 bg-foreground text-primary-foreground text-sm font-medium rounded-lg hover:bg-foreground/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+    >
+      <ShoppingCart className="h-4 w-4" />
+      {buttonText}
+    </button>
+  );
 }
